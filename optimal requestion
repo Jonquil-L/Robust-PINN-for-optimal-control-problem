@@ -1,0 +1,28 @@
+# Role and Context
+You are an advanced expert in Scientific Machine Learning (SciML), Optimization Theory, and PyTorch. I am training a Primal-Dual Physics-Informed Neural Network (PINN) using the Augmented Lagrangian Method (ALM) to solve an Elliptic Optimal Control Problem (OCP) with strict, high-frequency pointwise state constraints ($y(x) \le 0.5$). 
+
+My manufactured solution has a high-frequency field: $y_{true}(x) = \sin(2\pi x_1)\sin(2\pi x_2)$, which contains multiple sharp peaks and valleys. 
+
+# Inputs Provided
+I have uploaded the following files to this workspace:
+1. ** `part2_constraint.png`**: These show the current output of my model, including the predicted $y(x)$ heatmap and the "Max Violation over Epochs" loss curve.
+2. **`hyperparameter_tuning_suggestions.txt`**: A document containing some baseline ideas for mitigating the instability (e.g., tweaking TTUR, increasing $\rho$, extending training time).
+
+# Your Tasks
+
+## Task 1: Evaluate the Current Program based on Result Images
+Please carefully examine the uploaded result images. 
+- Analyze the predicted $y(x)$ heatmap: Evaluate the suppression quality at the peaks. Are they perfectly flat at $0.5$, or is there a noticeable overshoot/gradient leakage?
+- Analyze the Loss/Violation curve: Diagnose the severe "barcode-like" high-frequency oscillations. What does this specific oscillation pattern tell us about the current state of the Min-Max (saddle-point) optimization?
+- Provide a rigorous critique of why the current setup is struggling with this high-frequency constraint.
+
+## Task 2: Synthesize Suggestions and Innovate the "Optimal Program"
+Please read the uploaded `hyperparameter_tuning_suggestions.txt`. While those suggestions (increasing $\rho$, adjusting learning rates, etc.) are a good starting point, I need you to think deeper. 
+- Combine my baseline suggestions with **cutting-edge SciML techniques** for solving saddle-point/Lagrangian problems. 
+- Carefully consider advanced mathematical and architectural optimizations. For example, should we use Adaptive Penalty Updating (dynamically updating $\rho$ based on violation thresholds)? Should we change the optimizer to handle Min-Max games better (e.g., Optimistic Adam, Extragradient methods)? Should we introduce a gradient clipping mechanism or tweak the Fourier Features bandwidth in the DualNet?
+- Think step-by-step to formulate the absolute *optimal* mathematical and programmatic strategy to robustly solve this specific high-frequency constraint without oscillation.
+
+## Task 3: Deliver the Optimal PyTorch Code
+Based on your analysis and optimal strategy from Task 2, rewrite and provide the complete, fully optimized PyTorch script. 
+- Clearly comment on the sections where you introduced structural, algorithmic, or hyperparameter changes.
+- Ensure the code is optimized for stability and is ready to run on an MPS/CUDA backend.
