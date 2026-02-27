@@ -1,0 +1,25 @@
+## Part 3: Advanced Implementation for the DualNet (Primal-Dual PINN)
+For the pointwise state constraint $y(x) \le y_{\max}$, we will specifically use an **independent Neural Network (DualNet)** to approximate the Lagrange multiplier $\mu(x)$, rather than using discrete grid updates. Because this introduces a highly sensitive Min-Max (Saddle Point) optimization problem, your PyTorch implementation MUST adhere to the following strict architectural and training guidelines:
+
+### 1. DualNet Architecture & Non-negativity Constraint
+* The Lagrange multiplier for an inequality constraint must be non-negative ($\mu(x) \ge 0$). 
+* Ensure that the final layer of the `DualNet` applies a `Softplus` or `ReLU` activation function to strictly enforce this mathematical condition.
+* *(Optional but recommended)*: To overcome spectral bias and capture sharp transitions (spikes) in the multiplier at the active constraint boundaries, consider incorporating a basic Fourier Feature mapping or Sine activations (SIREN) in the first layer of the `DualNet`.
+
+### 2. Augmented Lagrangian Loss Formulation
+Do not rely on a standard Lagrangian; you must implement the **Augmented Lagrangian** to provide local strong convexity. 
+* The state constraint loss component should be formulated as:
+  $$L_{constraint} = \frac{1}{N_{c}} \sum \left[ \mu(x) \cdot \text{ReLU}(y(x) - y_{\max}) + \frac{\rho}{2} \cdot \left( \text{ReLU}(y(x) - y_{\max}) \right)^2 \right]$$
+  where $\rho$ is the penalty parameter.
+
+### 3. Dynamic Resampling
+* Take advantage of the mesh-free nature of the DualNet. Instead of using a fixed grid of collocation points, generate a new batch of random collocation points uniformly distributed in $\Omega$ at every training epoch.
+
+### 4. Two-Time-Scale Update Rule (TTUR) & Alternating Optimization
+* Initialize **two separate optimizers** (e.g., Adam) for the PrimalNet and DualNet.
+* Use unbalanced learning rates to prevent the networks from oscillating. Set the PrimalNet's learning rate slightly higher (e.g., `1e-3`) and the DualNet's learning rate lower (e.g., `1e-4`).
+* Implement an alternating update mechanism. For example: update the PrimalNet (minimizing the total loss) for $K$ steps (e.g., $K=5$), and then update the DualNet (maximizing the constraint loss) for 1 step. 
+
+### 5. MPS Memory Management & Warm-start
+* **Warm-start:** For the first few hundred epochs, keep the DualNet frozen (or $\mu(x)=0$) and the penalty $\rho$ very small, allowing the PrimalNet to learn the baseline PDE physics first. Only unfreeze the DualNet and Min-Max game after the PDE residual is reasonably minimized.
+* **Hardware specific:** Min-Max training with `retain_graph=True` can easily cause memory leaks on Apple Silicon's Unified Memory. Ensure that computational graphs are properly freed after the Primal and Dual updates, and explicitly call `torch.mps.empty_cache()` periodically (e.g., every 100 epochs) to maintain memory health.
