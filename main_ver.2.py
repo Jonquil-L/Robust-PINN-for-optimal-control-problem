@@ -5,8 +5,8 @@ Part 1: Unscaled vs. Scaled (Robust) PINN — demonstrates gradient imbalance fi
 Part 2: Augmented Lagrangian + DualNet for pointwise state constraints
 
 Manufactured solution on Ω = [0,1]²:
-    y_true(x) = sin(πx₁)sin(πx₂)
-    p_true(x) = sin(πx₁)sin(πx₂)
+    y_true(x) = sin(2πx₁)sin(2πx₂)
+    p_true(x) = sin(2πx₁)sin(2πx₂)
 
 First-order optimality conditions (α-regularized OCP):
     -Δȳ = f + u_d - α⁻¹p̄       (state equation)
@@ -33,25 +33,26 @@ else:
     device = torch.device("cpu")
 print(f"Using device: {device}")
 
+FREQ = 2.0 * math.pi  # 2π frequency
 
 # ===========================================================================
-# Manufactured Solution Helpers
+# Manufactured Solution Helpers (2π frequency)
 # ===========================================================================
 def y_true(x):
-    """True state: sin(πx₁)sin(πx₂)"""
-    return torch.sin(math.pi * x[:, 0:1]) * torch.sin(math.pi * x[:, 1:2])
+    """True state: sin(2πx₁)sin(2πx₂)"""
+    return torch.sin(FREQ * x[:, 0:1]) * torch.sin(FREQ * x[:, 1:2])
 
 def p_true(x):
-    """True adjoint: sin(πx₁)sin(πx₂)"""
-    return torch.sin(math.pi * x[:, 0:1]) * torch.sin(math.pi * x[:, 1:2])
+    """True adjoint: sin(2πx₁)sin(2πx₂)"""
+    return torch.sin(FREQ * x[:, 0:1]) * torch.sin(FREQ * x[:, 1:2])
 
 def f_source(x, alpha):
-    """Source term f such that optimality conditions are satisfied."""
-    return 2.0 * math.pi**2 * y_true(x)
+    """Source term f: -Δy_true = 2*(2π)² * y_true, so f = 8π² * y_true"""
+    return 2.0 * FREQ**2 * y_true(x)
 
 def y_d_target(x):
-    """Desired state y_d = y_true - 2π²p_true"""
-    return y_true(x) - 2.0 * math.pi**2 * p_true(x)
+    """Desired state y_d = y_true - 8π²p_true"""
+    return y_true(x) - 2.0 * FREQ**2 * p_true(x)
 
 def u_d_target(x, alpha):
     """Desired control u_d = α⁻¹p_true"""
@@ -62,17 +63,12 @@ def u_d_target(x, alpha):
 # Laplacian via Automatic Differentiation
 # ===========================================================================
 def laplacian(u, x):
-    """
-    Compute Laplacian Δu = Σ_i ∂²u/∂xᵢ²  using torch.autograd.grad.
-    Requires x to have requires_grad=True and u computed from x.
-    Both create_graph=True calls are needed for higher-order gradients.
-    """
     grad_u = torch.autograd.grad(
         u, x,
         grad_outputs=torch.ones_like(u),
         create_graph=True,
         retain_graph=True
-    )[0]  
+    )[0]
 
     lap = torch.zeros_like(u)
     for i in range(x.shape[1]):
@@ -88,22 +84,59 @@ def laplacian(u, x):
 
 
 # ===========================================================================
-# Part 1: PINN Network (Unscaled and Scaled modes)
+# Fourier Feature Embedding
+# ===========================================================================
+class FourierEmbed(nn.Module):
+    def __init__(self, in_dim=2, n_fourier=64, sigma=4.0):
+        super().__init__()
+        B = torch.randn(n_fourier, in_dim) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, x):
+        proj = x @ self.B.T
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=1)
+
+
+# ===========================================================================
+# Optimistic Adam Optimizer
+# ===========================================================================
+class OptimisticAdam(torch.optim.Adam):
+    """Adam with optimistic gradient correction: g = 2*grad_t - grad_{t-1}"""
+    def step(self, closure=None):
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if 'prev_grad' not in state:
+                    state['prev_grad'] = p.grad.data.clone()
+                else:
+                    prev = state['prev_grad']
+                    p.grad.data = 2.0 * p.grad.data - prev
+                    state['prev_grad'] = p.grad.data.clone()
+        return super().step(closure)
+
+
+# ===========================================================================
+# Part 1: PINN with Fourier Features
 # ===========================================================================
 class PINN(nn.Module):
-    def __init__(self, scaled: bool = False):
+    def __init__(self, scaled: bool = False, n_fourier=64, sigma=4.0, hidden=128):
         super().__init__()
         self.scaled = scaled
+        self.embed = FourierEmbed(2, n_fourier, sigma)
+        in_dim = 2 * n_fourier
         self.net = nn.Sequential(
-            nn.Linear(2, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 2),   
+            nn.Linear(in_dim, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, 2),
         )
 
     def forward(self, x):
-        return self.net(x)
+        feat = self.embed(x)
+        return self.net(feat)
 
 def pinn_loss(model, x_int, x_bnd, alpha):
     x_int = x_int.requires_grad_(True)
@@ -143,13 +176,13 @@ def sample_boundary(n, device):
     zeros = torch.zeros(n, device=device)
     ones = torch.ones(n, device=device)
     m = n // 4
-    edge0 = torch.stack([t[:m], zeros[:m]], dim=1)       
-    edge1 = torch.stack([t[m:2*m], ones[m:2*m]], dim=1)  
-    edge2 = torch.stack([zeros[2*m:3*m], t[2*m:3*m]], dim=1)  
-    edge3 = torch.stack([ones[3*m:], t[3*m:]], dim=1)    
+    edge0 = torch.stack([t[:m], zeros[:m]], dim=1)
+    edge1 = torch.stack([t[m:2*m], ones[m:2*m]], dim=1)
+    edge2 = torch.stack([zeros[2*m:3*m], t[2*m:3*m]], dim=1)
+    edge3 = torch.stack([ones[3*m:], t[3*m:]], dim=1)
     return torch.cat([edge0, edge1, edge2, edge3], dim=0)
 
-def train_part1(alpha=1e-4, n_steps=10000, n_int=1024, n_bnd=256, lr=1e-3):
+def train_part1(alpha=1e-4, n_steps=10000, n_int=2048, n_bnd=256, lr=1e-3):
     print("\n" + "="*60)
     print(f"Part 1: Unscaled vs. Scaled PINN  (α = {alpha})")
     print("="*60)
@@ -187,25 +220,24 @@ def train_part1(alpha=1e-4, n_steps=10000, n_int=1024, n_bnd=256, lr=1e-3):
 
 
 # ===========================================================================
-# Part 2: PrimalNet
+# Part 2: PrimalNet with Fourier Features
 # ===========================================================================
 class PrimalNet(nn.Module):
-    """
-    CRITICAL FIX: Outputs the SCALED variables (y_sc, p_sc) directly.
-    Boundary conditions y_sc=0 enforced via multiplication mask.
-    """
-    def __init__(self):
+    def __init__(self, n_fourier=64, sigma=4.0, hidden=128):
         super().__init__()
+        self.embed = FourierEmbed(2, n_fourier, sigma)
+        in_dim = 2 * n_fourier
         self.net = nn.Sequential(
-            nn.Linear(2, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 64), nn.Tanh(),
-            nn.Linear(64, 2),  
+            nn.Linear(in_dim, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
+            nn.Linear(hidden, 2),
         )
 
     def forward(self, x):
-        out = self.net(x)
+        feat = self.embed(x)
+        out = self.net(feat)
         mask = x[:, 0:1] * (1.0 - x[:, 0:1]) * x[:, 1:2] * (1.0 - x[:, 1:2])
         y_sc = mask * out[:, 0:1]
         p_sc = out[:, 1:2]
@@ -216,9 +248,9 @@ class PrimalNet(nn.Module):
 # Part 2: DualNet (Fourier Features + Softplus)
 # ===========================================================================
 class DualNet(nn.Module):
-    def __init__(self, n_fourier: int = 32, hidden: int = 64):
+    def __init__(self, n_fourier: int = 64, hidden: int = 128):
         super().__init__()
-        sigma = 5.0
+        sigma = 10.0
         B = torch.randn(n_fourier, 2) * sigma
         self.register_buffer("B", B)
 
@@ -232,10 +264,10 @@ class DualNet(nn.Module):
         self.softplus = nn.Softplus()
 
     def forward(self, x):
-        proj = x @ self.B.T       
-        feat = torch.cat([torch.sin(proj), torch.cos(proj)], dim=1)  
-        raw = self.mlp(feat)       
-        return self.softplus(raw)  # strictly enforces μ(x) ≥ 0
+        proj = x @ self.B.T
+        feat = torch.cat([torch.sin(proj), torch.cos(proj)], dim=1)
+        raw = self.mlp(feat)
+        return self.softplus(raw)
 
 
 # ===========================================================================
@@ -244,8 +276,7 @@ class DualNet(nn.Module):
 
 def augmented_lagrangian_loss(primal_net, dual_net, x_int, alpha, y_max, rho):
     x_int = x_int.requires_grad_(True)
-    
-    # 1. PrimalNet directly predicts the scaled, well-behaved variables
+
     y_sc, p_sc = primal_net(x_int)
 
     lap_ysc = laplacian(y_sc, x_int)
@@ -259,20 +290,17 @@ def augmented_lagrangian_loss(primal_net, dual_net, x_int, alpha, y_max, rho):
     a34    = alpha ** 0.75
     a14    = alpha ** 0.25
 
-    # 2. Balanced PDE residuals
     R1 = -sqrt_a * lap_ysc + p_sc - a34 * (f_val + ud_val)
     R2 = -sqrt_a * lap_psc - y_sc + a14 * yd_val
 
     loss_pde = (R1**2).mean() + (R2**2).mean()
 
-    # Boundary condition on interior points is handled by PrimalNet mask
     loss_bc = torch.tensor(0.0, device=x_int.device)
 
-    # 3. CRITICAL FIX: Inverse scale to physical state for constraints
     y_pred = y_sc / a14
 
-    violation = torch.relu(y_pred - y_max)          
-    mu = dual_net(x_int.detach())                   
+    violation = torch.relu(y_pred - y_max)
+    mu = dual_net(x_int.detach())
     loss_constraint = (mu.detach() * violation + 0.5 * rho * violation**2).mean()
 
     loss_total = loss_pde + loss_bc + loss_constraint
@@ -281,25 +309,25 @@ def augmented_lagrangian_loss(primal_net, dual_net, x_int, alpha, y_max, rho):
 
 def dual_loss(primal_net, dual_net, x_int, alpha, y_max, rho):
     with torch.no_grad():
-        # Get scaled state, then inverse-scale to physical domain
         y_sc, _ = primal_net(x_int)
         y_pred = y_sc / (alpha ** 0.25)
         violation = torch.relu(y_pred - y_max)
 
     mu = dual_net(x_int)
-    # Gradient ascent
-    loss_dual = -(mu * violation).mean()
+    # Gradient ascent + entropy regularization
+    entropy = 1e-4 * (mu * torch.log(mu + 1e-8)).mean()
+    loss_dual = -(mu * violation).mean() + entropy
     return loss_dual
 
 
 # ===========================================================================
-# Part 2 Training: Warm-start + TTUR Alternating Optimization
+# Part 2 Training: Warm-start + TTUR + Optimistic Adam + Adaptive rho
 # ===========================================================================
-def train_part2(alpha=1e-4, n_epochs=3000, n_warmup=500,
-                n_int=1024, y_max=0.5,
-                rho_init=0.01, rho_final=10.0,
-                K=5, lr_primal=1e-3, lr_dual=1e-4):
-    
+def train_part2(alpha=1e-4, n_epochs=6000, n_warmup=1500,
+                n_int=2048, y_max=0.5,
+                rho=1.0,
+                K=2, lr_primal=5e-4, lr_dual=5e-4):
+
     print("\n" + "="*60)
     print(f"Part 2: Augmented Lagrangian (y_max={y_max}, α={alpha})")
     print("="*60)
@@ -307,29 +335,31 @@ def train_part2(alpha=1e-4, n_epochs=3000, n_warmup=500,
     primal_net = PrimalNet().to(device)
     dual_net   = DualNet().to(device)
 
-    opt_primal = torch.optim.Adam(primal_net.parameters(), lr=lr_primal)
-    opt_dual   = torch.optim.Adam(dual_net.parameters(),   lr=lr_dual)
+    opt_primal = OptimisticAdam(primal_net.parameters(), lr=lr_primal)
+    opt_dual   = OptimisticAdam(dual_net.parameters(),   lr=lr_dual)
+
+    # Cosine annealing for primal after warmup
+    scheduler_primal = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_primal, T_max=n_epochs - n_warmup, eta_min=1e-5)
 
     hist_pde, hist_constraint, hist_total = [], [], []
     hist_max_violation = []
 
+    ema_violation = 0.0
+    ema_beta = 0.95
+
     for epoch in range(1, n_epochs + 1):
         x_int = sample_interior(n_int, device)
 
-        if epoch <= n_warmup:
-            rho = rho_init
-            dual_frozen = True
-        else:
-            frac = (epoch - n_warmup) / max(1, n_epochs - n_warmup)
-            rho = rho_init + (rho_final - rho_init) * frac
-            dual_frozen = False
+        dual_frozen = (epoch <= n_warmup)
 
-        # ---- Step 1: Update PrimalNet ----
+        # ---- Step 1: Update PrimalNet (K steps) ----
         for _ in range(K):
             opt_primal.zero_grad()
             loss_pde, loss_c, loss_total = augmented_lagrangian_loss(
                 primal_net, dual_net, x_int, alpha, y_max, rho)
             loss_total.backward()
+            nn.utils.clip_grad_norm_(primal_net.parameters(), max_norm=1.0)
             opt_primal.step()
 
         # ---- Step 2: Update DualNet ----
@@ -337,7 +367,12 @@ def train_part2(alpha=1e-4, n_epochs=3000, n_warmup=500,
             opt_dual.zero_grad()
             loss_d = dual_loss(primal_net, dual_net, x_int, alpha, y_max, rho)
             loss_d.backward()
+            nn.utils.clip_grad_norm_(dual_net.parameters(), max_norm=1.0)
             opt_dual.step()
+
+        # Cosine annealing after warmup
+        if epoch > n_warmup:
+            scheduler_primal.step()
 
         # Logging
         hist_pde.append(loss_pde.item())
@@ -350,14 +385,23 @@ def train_part2(alpha=1e-4, n_epochs=3000, n_warmup=500,
             max_viol = torch.relu(y_eval - y_max).max().item()
         hist_max_violation.append(max_viol)
 
+        # EMA violation tracking + adaptive rho
+        ema_violation = ema_beta * ema_violation + (1 - ema_beta) * max_viol
+        if not dual_frozen:
+            if ema_violation > 0.01:
+                rho = min(rho * 1.05, 100.0)
+            elif ema_violation < 0.001:
+                rho = max(rho * 0.99, 0.1)
+
         if epoch % 200 == 0:
-            status = "WARM-START" if dual_frozen else f"ρ={rho:.3f}"
+            status = "WARM-UP" if dual_frozen else f"ρ={rho:.2f}"
             print(f"  Epoch {epoch:4d} [{status:12s}] | "
                   f"PDE={loss_pde.item():.4e}  "
-                  f"Constraint={loss_c.item():.4e}  "
-                  f"MaxViol={max_viol:.4e}")
+                  f"Constr={loss_c.item():.4e}  "
+                  f"MaxViol={max_viol:.4e}  "
+                  f"EMA={ema_violation:.4e}")
 
-        # MPS Memory Management
+        # Memory management
         if epoch % 100 == 0:
             if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
@@ -482,12 +526,13 @@ def main():
     # ---- Part 2 ----
     primal_net, dual_net, hist2 = train_part2(
         alpha=ALPHA,
-        n_epochs=3000,
-        n_warmup=500,
+        n_epochs=6000,
+        n_warmup=1500,
         y_max=0.5,
-        rho_init=0.01,
-        rho_final=10.0,
-        K=5,
+        rho=1.0,
+        K=2,
+        lr_primal=5e-4,
+        lr_dual=5e-4,
     )
     plot_part2(hist2, primal_net, alpha=ALPHA, y_max=0.5)
 
