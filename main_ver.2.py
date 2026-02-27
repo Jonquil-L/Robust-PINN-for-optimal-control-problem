@@ -15,6 +15,7 @@ First-order optimality conditions (α-regularized OCP):
 """
 
 import math
+import time
 import torch
 import torch.nn as nn
 import numpy as np
@@ -34,6 +35,10 @@ else:
 print(f"Using device: {device}")
 
 FREQ = 2.0 * math.pi  # 2π frequency
+
+def _ts():
+    """Return timestamp string for unique filenames."""
+    return time.strftime("%Y%m%d_%H%M%S")
 
 # ===========================================================================
 # Manufactured Solution Helpers (2π frequency)
@@ -429,9 +434,10 @@ def plot_part1(hist_u, hist_s, model_unscaled, model_scaled, alpha):
     ax.legend()
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("part1_loss_comparison.png", dpi=150)
+    fname = f"part1_loss_comparison_{_ts()}.png"
+    plt.savefig(fname, dpi=150)
     plt.close()
-    print("Saved: part1_loss_comparison.png")
+    print(f"Saved: {fname}")
 
     n_grid = 64
     xs = torch.linspace(0, 1, n_grid)
@@ -454,9 +460,10 @@ def plot_part1(hist_u, hist_s, model_unscaled, model_scaled, alpha):
         plt.colorbar(im, ax=ax)
     plt.suptitle(f"Part 1 Solution (α = {alpha})")
     plt.tight_layout()
-    plt.savefig("part1_solution.png", dpi=150)
+    fname = f"part1_solution_{_ts()}.png"
+    plt.savefig(fname, dpi=150)
     plt.close()
-    print("Saved: part1_solution.png")
+    print(f"Saved: {fname}")
 
 
 def plot_part2(hist, primal_net, alpha, y_max):
@@ -471,9 +478,10 @@ def plot_part2(hist, primal_net, alpha, y_max):
     ax.legend()
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("part2_loss.png", dpi=150)
+    fname = f"part2_loss_{_ts()}.png"
+    plt.savefig(fname, dpi=150)
     plt.close()
-    print("Saved: part2_loss.png")
+    print(f"Saved: {fname}")
 
     n_grid = 64
     xs = torch.linspace(0, 1, n_grid)
@@ -505,9 +513,10 @@ def plot_part2(hist, primal_net, alpha, y_max):
     ax2.grid(True, which="both", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("part2_constraint.png", dpi=150)
+    fname = f"part2_constraint_{_ts()}.png"
+    plt.savefig(fname, dpi=150)
     plt.close()
-    print("Saved: part2_constraint.png")
+    print(f"Saved: {fname}")
 
 
 # ===========================================================================
@@ -536,11 +545,7 @@ def main():
     )
     plot_part2(hist2, primal_net, alpha=ALPHA, y_max=0.5)
 
-    print("\nDone. Generated files:")
-    print("  part1_loss_comparison.png")
-    print("  part1_solution.png")
-    print("  part2_loss.png")
-    print("  part2_constraint.png")
+    print("\nDone. All output images saved with timestamps.")
 
 if __name__ == "__main__":
     main()
