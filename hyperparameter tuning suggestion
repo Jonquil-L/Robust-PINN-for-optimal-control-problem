@@ -1,0 +1,18 @@
+# Exploring Advanced Solutions for High-Frequency State Constraints in Primal-Dual PINNs
+
+I am currently using a **Primal-Dual Neural Network (with the Augmented Lagrangian Method)** to solve an elliptic Optimal Control Problem (OCP) with strict pointwise state constraints ($y(x) \le 0.5$). 
+
+Recently, I upgraded my manufactured solution to a high-frequency physical field: $y_{true}(x) = \sin(2\pi x_1)\sin(2\pi x_2)$, which features two sharp positive peaks (+1.0) and two negative valleys (-1.0). 
+While the DualNet successfully suppresses the peaks, the suppression is not perfectly flat at $0.5$ (slight overshoot), and the maximum constraint violation loss oscillates wildly (like a barcode) without smoothly converging to absolute zero. The PrimalNet and DualNet seem to be stuck in an unstable Min-Max tug-of-war.
+
+To mitigate this Min-Max oscillation and perfectly flatten the peaks, I have considered the following **hyperparameter tuning suggestions**:
+
+1. **Strengthen the ALM Penalty**: Increase `rho_final` from `10.0` to `50.0` or `100.0` to provide stronger local convexity and a stricter "physical guardrail".
+2. **Empower the DualNet (TTUR adjustments)**: 
+   - Increase the DualNet's learning rate (`lr_dual`) from `1e-4` to `5e-4` or `1e-3`.
+   - Reduce the Primal-to-Dual alternating update ratio `K` from `5` to `2` or `1`, allowing the multiplier network to react more promptly to violations.
+3. **Extend Training Horizon**: Increase `n_epochs` from `3000` to `5000` or `8000` to grant the saddle-point system more time to discover a stable Nash Equilibrium.
+
+**However, I want to emphasize that these are merely basic hyperparameter tuning suggestions.** Beyond simply tweaking learning rates and penalties, **what other *new*, *advanced*, or *fundamentally different* methods exist** in the current SciML/PINNs literature to perfectly resolve this high-frequency state constraint issue? 
+
+I am looking for innovative mathematical reformulations, novel loss landscape smoothing techniques, or architectural changes (e.g., modifications to the multiplier representation) that can robustly conquer this Min-Max instability.
